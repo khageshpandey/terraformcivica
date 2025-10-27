@@ -1,0 +1,11 @@
+.env
+.envrc
+.out
+terraform.tfstate*
+.terraform
+.makerc
+.idea
+.DS_Store
+Thumbs.db
+results
+checkov*
