@@ -1,0 +1,24 @@
+name: Chore
+description: A chore is a piece of work that may not directly add business value to the product but still require effort to do. e.g. refactoring.
+labels: ['type: chore']
+assignees: []
+projects: []
+body:
+- type: textarea
+  attributes:
+    label: Description
+    description: Describe the chore task here
+  validations:
+    required: true
+- type: textarea
+  attributes:
+    label: Steps to complete
+    description: List the steps required to complete this task
+    value: |
+      - [ ] Step 1
+      - [ ] Step 2
+      - [ ] Step 3
+- type: textarea
+  attributes:
+    label: Additional Information
+    description: Add any additional information or context here

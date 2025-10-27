@@ -1,0 +1,41 @@
+name: Epic
+description: An epic is a large body of work that can be broken down into a number of smaller stories. Epics are almost always delivered over a set of sprints.
+title: "[EPIC]:"
+labels: ['type: :scroll: epic']
+assignees: []
+projects: []
+body:
+- type: textarea
+  attributes:
+    label: Summary
+    description: A brief description of what this epic is about
+  validations:
+    required: true
+- type: textarea
+  attributes:
+    label: Goal
+    description: The overarching objective or outcome of this epic
+  validations:
+    required: true
+- type: textarea
+  attributes:
+    label: Scope
+    description: The boundaries or context within which this epic operates
+  validations:
+    required: false
+- type: textarea
+  attributes:
+    label: Features
+    description: List the features associated with this epic (can be added later)
+    value: |
+      - [ ] <Replace with `#NUMBER` to reference an item>
+      - [ ] <Replace with `#NUMBER` to reference an item>
+      - [ ] <Replace with `#NUMBER` to reference an item>
+  validations:
+    required: false
+- type: textarea
+  attributes:
+    label: Additional information
+    description: Add any other relevant information, such as links to related documents or discussions, diagrams, mockups, etc.
+  validations:
+    required: false

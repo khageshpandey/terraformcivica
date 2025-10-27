@@ -1,0 +1,35 @@
+name: Spike
+description: Spikes are work undertaken to reduce unknowns, do research or other work relating to learning and increasing certainty
+title: "[SPIKE]"
+labels: ['type: :round_pushpin: spike']
+assignees: []
+projects: []
+body:
+- type: textarea
+  attributes:
+    label: Summary
+    description: A brief description of what this spike is about. e.g. Knowledge gaps, Technology Gaps, Product Gaps being investigated
+  validations:
+    required: true
+- type: textarea
+  attributes:
+    label: What are the goals and deliverables of this spike?
+    placeholder: |
+       Example:
+        - Proof of Concept(PoC) of a new feature within a product, or around implementing a new technology 
+        - New process defined for a particular way of working within engineering or product
+        - Understanding an existing or new aspect of the business domain, such as security or data protection
+  validations:
+    required: true
+- type: checkboxes
+  attributes:
+    label: Acceptance Criteria
+    options:
+      - label: Outcome is documented in an ADR in the repository
+- type: textarea
+  attributes:
+    label: Additional Information
+    description: Add any other relevant information, such as links to related documents or discussions, diagrams, mockups, etc.
+  validations:
+    required: true
+    
