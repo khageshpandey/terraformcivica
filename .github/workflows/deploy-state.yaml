@@ -1,0 +1,48 @@
+name: Deploy State Backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: ""
+        type: choice
+        options:
+          - 555124824930
+          - 550248470219
+      region:
+        description: 'Region to deploy to'
+        required: true
+        default: ""
+        type: choice
+        options:
+          - eu-central-1
+          - eu-west-1
+          - eu-west-2
+          - us-east-1
+          - ap-southeast-2
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ inputs.environment }}:role/TerraformExecutionRole
+          role-session-name: backendesession
+          aws-region: ${{ inputs.region }}
+
+      - name: Backend
+        uses: CivicaActions/terraform-backend/aws@v0.2.0
+        with:
+          terraform-backend-bucket: ${{ inputs.environment }}-icasework-tf-state-${{ inputs.region }}
+          aws-region: ${{ inputs.region }}
