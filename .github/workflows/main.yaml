@@ -1,0 +1,355 @@
+name: Terraform Workflow
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.semantic-release.outputs.release-version }}
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - name: Release
+        uses: CivicaActions/semantic-release@v1.2.0
+        id: semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release Success
+        shell: bash
+        if: steps.semantic-release.outputs.new-release-published == 'true'
+        run: |
+          echo "Release published: ${{ steps.semantic-release.outputs.release-version }}"
+
+  validate:
+    name: Validate
+    needs: [release]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref || github.event.pull_request.head.ref }}
+
+      - name: Configure AWS credentials (iCaseworks Data)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::555124824930:role/TerraformExecutionRole
+          role-session-name: validatesession
+          aws-region: eu-central-1
+
+      - name: Validate (Dev)
+        uses: CivicaActions/terraform-validate@v2.0.0
+        with:
+          terraform-version: 1.8.3
+          terraform-unit-tests: true
+          terraform-var-files: tfvars/dev.tfvars
+          terraform-variables: "release_version=${{ needs.release.outputs.version }}"
+          terraform-checkov-scan: true
+          terraform-checkov-skip-check: CKV_AWS_111,CKV_AWS_356,CKV_AWS_340,CKV_AWS_312
+
+      - name: Configure AWS credentials (iCaseworks Apps)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::550248470219:role/TerraformExecutionRole
+          role-session-name: validatesession
+          aws-region: eu-central-1
+
+      - name: Validate (Prod-Sydney)
+        uses: CivicaActions/terraform-validate@v2.0.0
+        with:
+          terraform-version: 1.8.3
+          terraform-unit-tests: true
+          terraform-var-files: tfvars/prod-sydney.tfvars
+          terraform-variables: "release_version=${{ needs.release.outputs.version }}"
+          terraform-checkov-scan: true
+          terraform-checkov-skip-check: CKV_AWS_111,CKV_AWS_356,CKV_AWS_340,CKV_AWS_312
+
+      - name: Validate (Prod-Ireland)
+        uses: CivicaActions/terraform-validate@v2.0.0
+        with:
+          terraform-version: 1.8.3
+          terraform-unit-tests: true
+          terraform-var-files: tfvars/prod-ireland.tfvars
+          terraform-variables: "release_version=${{ needs.release.outputs.version }}"
+          terraform-checkov-scan: true
+          terraform-checkov-skip-check: CKV_AWS_111,CKV_AWS_356,CKV_AWS_340,CKV_AWS_312
+
+      - name: Validate (Prod-London)
+        uses: CivicaActions/terraform-validate@v2.0.0
+        with:
+          terraform-version: 1.8.3
+          terraform-unit-tests: true
+          terraform-var-files: tfvars/prod-london.tfvars
+          terraform-variables: "release_version=${{ needs.release.outputs.version }}"
+          terraform-checkov-scan: true
+          terraform-checkov-skip-check: CKV_AWS_111,CKV_AWS_356,CKV_AWS_340,CKV_AWS_312
+
+      - name: Validate (Prod-NVirginia)
+        uses: CivicaActions/terraform-validate@v2.0.0
+        with:
+          terraform-version: 1.8.3
+          terraform-unit-tests: true
+          terraform-var-files: tfvars/prod-nvirginia.tfvars
+          terraform-variables: "release_version=${{ needs.release.outputs.version }}"
+          terraform-checkov-scan: true
+          terraform-checkov-skip-check: CKV_AWS_111,CKV_AWS_356,CKV_AWS_340,CKV_AWS_312
+
+  plan-dev:
+    name: Plan (Dev)
+    needs: [release, validate]
+    runs-on: ubuntu-latest
+    outputs:
+      changes-planned: ${{ steps.terraform-plan.outputs.changes-planned }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (iCaseworks Data)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::555124824930:role/TerraformExecutionRole
+          role-session-name: plansession
+          aws-region: eu-central-1
+
+      - name: Terraform Plan (Dev)
+        uses: CivicaActions/terraform-run@v1.4.0
+        id: terraform-plan
+        with:
+          terraform-version: 1.8.3
+          terraform-backend-config: bucket=555124824930-icasework-tf-state-eu-central-1 key=civica/icasework-beanstalk/terraform.tfstate
+          terraform-var-files: tfvars/dev.tfvars
+          terraform-variables: "release_version=${{ needs.release.outputs.version }}"
+          terraform-apply: false
+          environment: dev
+
+  plan-prod-sydney:
+    name: Plan (Prod-Sydney)
+    needs: [plan-dev]
+    runs-on: ubuntu-latest
+    outputs:
+      changes-planned: ${{ steps.terraform-plan-sydney.outputs.changes-planned }} 
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials (iCaseworks Apps)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::550248470219:role/TerraformExecutionRole
+          role-session-name: plansession
+          aws-region: eu-central-1
+
+      - name: Terraform Plan (Prod-Sydney)
+        uses: CivicaActions/terraform-run@v1.4.0
+        id: terraform-plan-sydney
+        with:
+          terraform-version: 1.8.3
+          terraform-backend-config: bucket=550248470219-icasework-tf-state-eu-central-1 key=civica/icasework-beanstalk/terraform.tfstate
+          terraform-var-files: tfvars/prod-sydney.tfvars
+          terraform-variables: "release_version=${{ needs.release.outputs.version }}"
+          terraform-apply: false
+          environment: prod-sydney
+          terraform-targets: "module.beanstalk_ap_southeast_2"
+
+  plan-prod-ireland:
+    name: Plan (Prod-Ireland)
+    needs: [plan-prod-sydney]
+    runs-on: ubuntu-latest
+    outputs:
+      changes-planned: ${{ steps.terraform-plan-ireland.outputs.changes-planned }} 
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials (iCaseworks Apps)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::550248470219:role/TerraformExecutionRole
+          role-session-name: plansession
+          aws-region: eu-central-1
+
+      - name: Terraform Plan (Prod-Ireland)
+        uses: CivicaActions/terraform-run@v1.4.0
+        id: terraform-plan-ireland
+        with:
+          terraform-version: 1.8.3
+          terraform-backend-config: bucket=550248470219-icasework-tf-state-eu-central-1 key=civica/icasework-beanstalk/terraform.tfstate
+          terraform-var-files: tfvars/prod-ireland.tfvars
+          terraform-variables: "release_version=${{ needs.release.outputs.version }}"
+          terraform-apply: false
+          environment: prod-ireland
+          terraform-targets: "module.beanstalk_eu_west_1"
+
+  plan-prod-london:
+    name: Plan (Prod-London)
+    needs: [plan-prod-ireland]
+    runs-on: ubuntu-latest
+    outputs:
+      changes-planned: ${{ steps.terraform-plan-london.outputs.changes-planned }} 
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials (iCaseworks Apps)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::550248470219:role/TerraformExecutionRole
+          role-session-name: plansession
+          aws-region: eu-central-1
+
+      - name: Terraform Plan (Prod-London)
+        uses: CivicaActions/terraform-run@v1.4.0
+        id: terraform-plan-london
+        with:
+          terraform-version: 1.8.3
+          terraform-backend-config: bucket=550248470219-icasework-tf-state-eu-central-1 key=civica/icasework-beanstalk/terraform.tfstate
+          terraform-var-files: tfvars/prod-london.tfvars
+          terraform-variables: "release_version=${{ needs.release.outputs.version }}"
+          terraform-apply: false
+          environment: prod-london
+          terraform-targets: "module.beanstalk_eu_west_2"
+
+  plan-prod-nvirginia:
+    name: Plan (Prod-NVirginia)
+    needs: [plan-prod-london]
+    runs-on: ubuntu-latest
+    outputs:
+      changes-planned: ${{ steps.terraform-plan-nvirginia.outputs.changes-planned }} 
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials (iCaseworks Apps)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::550248470219:role/TerraformExecutionRole
+          role-session-name: plansession
+          aws-region: eu-central-1
+
+      - name: Terraform Plan (Prod-NVirginia)
+        uses: CivicaActions/terraform-run@v1.4.0
+        id: terraform-plan-nvirginia
+        with:
+          terraform-version: 1.8.3
+          terraform-backend-config: bucket=550248470219-icasework-tf-state-eu-central-1 key=civica/icasework-beanstalk/terraform.tfstate
+          terraform-var-files: tfvars/prod-nvirginia.tfvars
+          terraform-variables: "release_version=${{ needs.release.outputs.version }}"
+          terraform-apply: false
+          environment: prod-nvirginia
+          terraform-targets: "module.beanstalk_us_east_1"
+
+  deploy-dev:
+    name: Deploy (Dev)
+    needs: plan-dev
+    environment: dev
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && needs.plan-dev.outputs.changes-planned == 'true'
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (iCaseworks Data)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::555124824930:role/TerraformExecutionRole
+          role-session-name: deploysession
+          aws-region: eu-central-1
+
+      - name: Terraform Apply (Dev)
+        uses: CivicaActions/terraform-run@v1.4.0
+        with:
+          terraform-version: 1.8.3
+          terraform-backend-config: bucket=555124824930-icasework-tf-state-eu-central-1 key=civica/icasework-beanstalk/terraform.tfstate
+          terraform-plan: false
+          environment: dev
+
+  deploy-prod:
+    name: Deploy (Prod)
+    needs: [plan-dev, plan-prod-sydney, plan-prod-ireland, plan-prod-london, plan-prod-nvirginia]
+    environment: prod
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && (needs.plan-prod-sydney.outputs.changes-planned == 'true' || needs.plan-prod-ireland.outputs.changes-planned == 'true' || needs.plan-prod-london.outputs.changes-planned == 'true' || needs.plan-prod-nvirginia.outputs.changes-planned == 'true')
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (iCaseworks Apps)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::550248470219:role/TerraformExecutionRole
+          role-session-name: deploysession
+          aws-region: eu-central-1
+
+      - name: Terraform Apply (Prod-Sydney)
+        uses: CivicaActions/terraform-run@v1.4.0
+        if: needs.plan-prod-sydney.outputs.changes-planned == 'true'
+        with:
+          terraform-version: 1.8.3
+          terraform-backend-config: bucket=550248470219-icasework-tf-state-eu-central-1 key=civica/icasework-beanstalk/terraform.tfstate
+          terraform-plan: false
+          environment: prod-sydney
+          terraform-targets: "module.beanstalk_ap_southeast_2"
+
+      - name: Terraform Apply (Prod-Ireland)
+        uses: CivicaActions/terraform-run@v1.4.0
+        if: needs.plan-prod-ireland.outputs.changes-planned == 'true'
+        with:
+          terraform-version: 1.8.3
+          terraform-backend-config: bucket=550248470219-icasework-tf-state-eu-central-1 key=civica/icasework-beanstalk/terraform.tfstate
+          terraform-plan: false
+          environment: prod-ireland
+          terraform-targets: "module.beanstalk_eu_west_1"
+
+      - name: Terraform Apply (Prod-London)
+        uses: CivicaActions/terraform-run@v1.4.0
+        if: needs.plan-prod-london.outputs.changes-planned == 'true'
+        with:
+          terraform-version: 1.8.3
+          terraform-backend-config: bucket=550248470219-icasework-tf-state-eu-central-1 key=civica/icasework-beanstalk/terraform.tfstate
+          terraform-plan: false
+          environment: prod-london
+          terraform-targets: "module.beanstalk_eu_west_2"
+
+      - name: Terraform Apply (Prod-NVirginia)
+        uses: CivicaActions/terraform-run@v1.4.0
+        if: needs.plan-prod-nvirginia.outputs.changes-planned == 'true'
+        with:
+          terraform-version: 1.8.3
+          terraform-backend-config: bucket=550248470219-icasework-tf-state-eu-central-1 key=civica/icasework-beanstalk/terraform.tfstate
+          terraform-plan: false
+          environment: prod-nvirginia
+          terraform-targets: "module.beanstalk_us_east_1"
