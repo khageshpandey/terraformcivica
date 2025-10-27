@@ -1,0 +1,757 @@
+Terraform installation---
+
+aws configure --profile tf-workshop
+
+aws sts get-caller-identity --profile tf-workshop
+
+wget -c https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_amd64.zip
+unzip terraform_1.5.7_linux_amd64.zip
+
+# Change to the directory where the "terraform" binary exists, and then run:
+
+sudo mv terraform /usr/local/bin/
+sudo chown root: /usr/local/bin/terraform
+sudo chmod a+x /usr/local/bin/terraform
+
+terraform version
+
+
+Provider Boilerplate
+Before starting with infrastructure definitions, we need to configure the providers we are going to use. We’ll take a deeper look at providers later on, so don’t worry too much about what this code does right now.
+
+We need the AWS provider.
+
+Create a backend.tf file with the following terraform definition:
+
+# This is a comment.
+# Terraform uses "#" to mark comments.
+
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 4.4.0"
+    }
+  }
+}
+
+
+Next, we must configure this provider, so create a provider.tf file with the provider definition:
+
+provider "aws" {
+  region  = "eu-west-1"
+  profile = "tf-workshop"
+}
+
+
+terraform init
+
+Let’s create a S3 bucket (resource type aws_s3_bucket). Create a new configuration file, called s3.tf
+
+# force_destroy deletes any objects when cleaning up
+
+resource "aws_s3_bucket" "web" {
+  bucket_prefix = "web-training-workshop03"
+  force_destroy = true
+}
+
+terraform plan
+
+terraform apply
+
+
+
+Let’s use Terraform to create an SSM parameter using the resource type aws_ssm_parameter.
+
+Create a new configuration file, called ssm.tf and add the below config.
+
+resource "aws_ssm_parameter" "greeting" {
+  name  = "greeting"
+  type  = "String"
+  value = "Hello from Terraform Essentials"
+}
+
+
+terraform apply
+
+You can find the saved state of a resource using the terraform state show command.
+terraform state show aws_ssm_parameter.greeting
+
+Modifying the SSM parameter resource
+Now let’s modify our SSM parameter by adding a new argument to it, within its curly braces.
+
+description = "A welcome message to our new Terraform users"
+COPY
+After adding this, save the file and run terraform plan. You will get output like the following:
+
+Terraform used the selected providers to generate the following execution plan. Resource actions are indicated with the following symbols:
+  ~ update in-place
+
+Terraform will perform the following actions:
+
+  # aws_ssm_parameter.greeting will be updated in-place
+  ~ resource "aws_ssm_parameter" "greeting" {
+      + description = "A welcome message to our new Terraform users"
+        id          = "greeting"
+        name        = "greeting"
+        tags        = {}
+        # (7 unchanged attributes hidden)
+    }
+
+Plan: 0 to add, 1 to change, 0 to destroy.
+
+
+Making a change that requires replacement
+Our previous change could be done in-place, i.e. by changing the existing resource. Unfortunately, not all changes can be done so smoothly.
+
+Try changing the name argument of your SSM parameter to greeting-message, then run a terraform plan.
+
+You will see output like the following:
+
+Terraform used the selected providers to generate the following execution plan. Resource actions are indicated with the following symbols:
+-/+ destroy and then create replacement
+
+Terraform will perform the following actions:
+
+  # aws_ssm_parameter.greeting must be replaced
+-/+ resource "aws_ssm_parameter" "greeting" {
+      ~ arn            = "arn:aws:ssm:eu-west-1:148974847721:parameter/greeting" -> (known after apply)
+      ~ data_type      = "text" -> (known after apply)
+      ~ id             = "greeting" -> (known after apply)
+      + insecure_value = (known after apply)
+      + key_id         = (known after apply)
+      ~ name           = "greeting" -> "greeting-message" # forces replacement
+      - tags           = {} -> null
+      ~ tags_all       = {} -> (known after apply)
+      ~ tier           = "Standard" -> (known after apply)
+      ~ version        = 2 -> (known after apply)
+        # (3 unchanged attributes hidden)
+    }
+
+Plan: 1 to add, 0 to change, 1 to destroy.
+
+
+Create an IAM policy document
+To define IAM permissions we can use the aws_iam_policy_document data source (we’ll discuss this in detail later). It is a way of generating an IAM policy documents in JSON format that can be referenced in a role declaration without using a literal JSON string. Create a new data.tf file and define the required policy documents:
+
+# Permissions for our role
+# Read access to all SSM parameters
+data "aws_iam_policy_document" "ssm_access" {
+  statement {
+    effect    = "Allow"
+    actions   = ["ssm:GetParameter"]
+    resources = ["*"]
+  }
+}
+
+# Role trust policy
+# Only EC2 instances can assume this role
+data "aws_iam_policy_document" "assume_role" {
+  statement {
+    effect = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
+
+
+Create an IAM role
+To provide a service such as EC2 the ability to use the SSM parameter an IAM role is required. This will have our permissions policy attached to it, as well as a trust policy to define who can access the role. Create a file called iam.tf:
+
+resource "aws_iam_role" "ssm_access" {
+  name               = "ssm_access"
+  assume_role_policy = data.aws_iam_policy_document.assume_role.json
+}
+Create an IAM policy
+Let’s create our permissions policy for the role, using the policy document we declared right at the start. Below the resource aws_iam_role in iam.tf add another for an aws_iam_policy:
+
+resource "aws_iam_policy" "ssm_access" {
+  name   = "get-ssm-params"
+  path   = "/"
+  policy = data.aws_iam_policy_document.ssm_access.json
+}
+
+We now have a policy created for accessing our SSM parameter. Note again we’re referencing the data resource to populate the policy argument, rather than a JSON literal string.
+
+IAM policy attachment
+Finally, after we have defined an IAM policy we need to attach it to the IAM role, creating an explicit link between them.
+
+Add the following resource to our iam.tf file:
+
+resource "aws_iam_role_policy_attachment" "ssm_access" {
+  role       = aws_iam_role.ssm_access.name
+  policy_arn = aws_iam_policy.ssm_access.arn
+}
+
+
+Dependencies
+By using references we’ve created dependencies between some of our resources. Our aws_iam_role_policy_attachment is dependent on both our aws_iam_role and aws_iam_policy.
+
+Let’s see how changes we make to resources can now effect each other. Start by changing the name attribute of the aws_iam_role resource:
+
+resource "aws_iam_role" "ssm_access" {
+  name               = "ssm_parameter_access" # This line has changed
+  assume_role_policy = data.aws_iam_policy_document.assume_role.json
+}
+
+
+Now run a terraform plan, can you predict what it’s going to output?
+
+Plan: 2 to add, 0 to change, 2 to destroy.
+You will see that Terraform plans to replace two of our resources, not just the one we changed. By changing the name of the role we are forcing a replacement, which cascades along the dependency graph, affecting all dependent resources.
+
+If you read the planned changes for the aws_iam_role_policy_attachment you can find exactly where this dependency is occurring.
+
+Run a terraform apply now and see if you can predict in which order resources are created and destroyed.
+
+
+
+-----------------------
+Input values
+Open s3.tf and change the aws_s3_bucket definition to the following:
+
+resource "aws_s3_bucket" "web" {
+  bucket_prefix = "web-${var.bucket_web}" # This line has changed.
+  force_destroy = true
+}
+
+
+
+Notice that the bucket_prefix argument is made up of some static text web-, and then the contents of a variable called bucket_web is embedded at the end. The basic string interpolation syntax is for the variable to be wrapped in ${} within the double quotes.
+
+Now add our variable definition to a new file, variables.tf:
+
+variable "bucket_web" {
+  type        = string
+  description = "S3 web bucket name"
+}
+
+
+
+Environment variables
+When using environment variables the format TF_VAR_name is used.
+
+For instance, you can set the bucket_web variable in the environment by running the following on Linux or MacOS:
+
+export TF_VAR_bucket_web=training-workshop03
+or in Windows Powershell:
+
+Set-Item -Path env:TF_VAR_bucket_web -Value "training-workshop03"
+
+
+You can pass in an input variable by using the -var parameter:
+
+terraform plan -var "bucket_web=training-workshop03"
+Having to either specify the variables in the command line, or via environment variables, soon becomes cumbersome when you have multiple variables to pass, or when using more complex variable types such as lists or maps.
+
+Try changing the value you pass in and planning. What changes do you expect to see?
+
+You can specify multiple values in a variable definitions text file with a filename ending in .tfvars, or as a JSON format file .tfvars.json. These variable definition files would normally be stored in your source code repository along with the Terraform code.
+
+Using a file of variables is less prone to errors than manually setting, or passing variables to Terraform.
+
+For example:
+
+terraform apply -var-file=filename.tfvars
+Create a file dev.tfvars with the contents
+
+# dev.tfvars
+environment = "development"
+bucket_web  = "training-workshop03"
+
+terraform plan -var-file=dev.tfvars
+
+
+Terraform no longer asks us for the bucket_web variable, as it obtained the value from the Terraform variables file.
+
+Notice the warning
+
+Warning: Value for undeclared variable
+
+The root module does not declare a variable named "environment" but a value was found in file "dev.tfv
+
+Add a variable called environment to the variables.tf as below.
+
+variable "environment" {
+  type = string
+}
+
+Variable Defaults
+Sometimes you want the option to configure a variable when needed, but otherwise default to a sane value. Variables support default values, which will be used in the absence of any other value. Change your variables file to add defaults for each variable we’ve defined so far.
+
+variable "bucket_web" {
+  type        = string
+  description = "S3 web bucket name"
+  default     = "training-workshop03"
+}
+
+variable "environment" {
+  type    = string
+  default = "development"
+}
+
+
+
+Setting up outputs
+Output values are a way to expose some information to the user, or to other Terraform code, and these are usually defined in a outputs.tf file.
+
+Let’s create a new file outputs.tf as below:
+
+output "bucket_id" {
+  value = aws_s3_bucket.web.id
+}
+
+terraform apply
+
+Data Sources
+Many providers, including the AWS provider, offer data sources as well as a set of resource types.
+
+Data sources allow Terraform to obtain and use information defined outside of Terraform.
+
+For example if you wish to reference AWS infrastructure that was not directly created by your current Terraform.
+
+We have already created a VPC in your allocated AWS account, and named it training.
+
+We can use the aws_vpc data source to look up all the information about that VPC.
+
+Find the file named data.tf and add in a new block:
+
+data "aws_vpc" "main" {
+  filter {
+    name   = "tag:Name"
+    values = ["training"]
+  }
+}
+
+
+
+Also add the following to the existing outputs.tf file:
+
+output "vpc_id" {
+  value = data.aws_vpc.main.id
+}
+
+terraform apply
+
+Add to the existing data.tf the following:
+
+data "aws_availability_zone" "az_a" {
+  state = "available"
+  name  = "eu-west-1a"
+}
+
+data "aws_availability_zone" "az_b" {
+  state = "available"
+  name  = "eu-west-1b"
+}
+
+Add the following to the existing outputs.tf file:
+
+output "availability_zone_a_id" {
+  value = data.aws_availability_zone.az_a.zone_id
+}
+
+output "availability_zone_b_id" {
+  value = data.aws_availability_zone.az_b.zone_id
+}
+
+terraform apply
+
+Outputs:
+availability_zone_a_id = "euw1-az3"
+availability_zone_b_id = "euw1-az1"
+
+
+
+Lists
+Terraform supports list data types, defined in literals with square brackets. When referencing an array the index starts from 0 for the first element.
+
+Lists are often used when dealing with networking, for example
+
+dns_servers = ["192.168.0.254", "8.8.8.8", "8.8.4.4"]
+When searching for data sources note there are often singular and plural versions.
+
+We have used the aws_availability_zone data source which obtains information about a single AZ. There is also a aws_availability_zones data source which returns information about all the AZs.
+
+Add the following to data.tf:
+
+data "aws_availability_zones" "azs" {
+  state = "available"
+}
+
+
+
+Add the following to outputs.tf:
+
+output "az_names" {
+  value = data.aws_availability_zones.azs.names
+}
+
+
+Input Values, Output Values, Data
+Input values
+Open s3.tf and change the aws_s3_bucket definition to the following:
+
+resource "aws_s3_bucket" "web" {
+  bucket_prefix = "web-${var.bucket_web}" # This line has changed.
+  force_destroy = true
+}
+COPY
+Notice that the bucket_prefix argument is made up of some static text web-, and then the contents of a variable called bucket_web is embedded at the end. The basic string interpolation syntax is for the variable to be wrapped in ${} within the double quotes.
+
+Now add our variable definition to a new file, variables.tf:
+
+variable "bucket_web" {
+  type        = string
+  description = "S3 web bucket name"
+}
+COPY
+Run a terraform apply, as we did not specify any default value for the variable bucket_web Terraform had to ask for user input when we ran apply. Enter the value training-workshop03 when prompted. As we’ve entered the same value as we had previously hardcoded, no changes should be needed.
+
+There are several ways we can supply input values to our existing Terraform to prevent the need for interactive input; they can be passed as environment variables, command line parameters, or read from text files.
+
+Environment variables
+When using environment variables the format TF_VAR_name is used.
+
+For instance, you can set the bucket_web variable in the environment by running the following on Linux or MacOS:
+
+export TF_VAR_bucket_web=training-workshop03
+or in Windows Powershell:
+
+Set-Item -Path env:TF_VAR_bucket_web -Value "training-workshop03"
+For the rest of that shell session, Terraform will pick up the variable value from the environment.
+
+Command line parameters
+You can pass in an input variable by using the -var parameter:
+
+terraform plan -var "bucket_web=training-workshop03"
+Having to either specify the variables in the command line, or via environment variables, soon becomes cumbersome when you have multiple variables to pass, or when using more complex variable types such as lists or maps.
+
+Try changing the value you pass in and planning. What changes do you expect to see?
+
+Load variable values from a file
+You can specify multiple values in a variable definitions text file with a filename ending in .tfvars, or as a JSON format file .tfvars.json. These variable definition files would normally be stored in your source code repository along with the Terraform code.
+
+Using a file of variables is less prone to errors than manually setting, or passing variables to Terraform.
+
+For example:
+
+terraform apply -var-file=filename.tfvars
+Create a tfvars file
+Create a file dev.tfvars with the contents
+
+# dev.tfvars
+environment = "development"
+bucket_web  = "training-workshop03"
+COPY
+Plan the changes
+Now plan the changes using our development variable file:
+
+# As you'll see when you read on, there'll be a warning
+terraform plan -var-file=dev.tfvars
+COPY
+Terraform no longer asks us for the bucket_web variable, as it obtained the value from the Terraform variables file.
+
+Notice the warning
+
+Warning: Value for undeclared variable
+
+The root module does not declare a variable named "environment" but a value was found in file "dev.tfvars".
+Add a variable called environment to the variables.tf as below.
+
+variable "environment" {
+  type = string
+}
+COPY
+Now try again.
+
+Variable Defaults
+Sometimes you want the option to configure a variable when needed, but otherwise default to a sane value. Variables support default values, which will be used in the absence of any other value. Change your variables file to add defaults for each variable we’ve defined so far.
+
+variable "bucket_web" {
+  type        = string
+  description = "S3 web bucket name"
+  default     = "training-workshop03"
+}
+
+variable "environment" {
+  type    = string
+  default = "development"
+}
+COPY
+For the rest of this section we will no longer need to specify the environment and bucket_web variables.
+
+Run a terraform apply and note how you did not need to provide any values.
+
+Setting up outputs
+Output values are a way to expose some information to the user, or to other Terraform code, and these are usually defined in a outputs.tf file.
+
+Let’s create a new file outputs.tf as below:
+
+output "bucket_id" {
+  value = aws_s3_bucket.web.id
+}
+COPY
+Apply the Terraform
+terraform apply
+COPY
+The output will display the S3 bucket ID.
+
+Data Sources
+Many providers, including the AWS provider, offer data sources as well as a set of resource types.
+
+Data sources allow Terraform to obtain and use information defined outside of Terraform.
+
+For example if you wish to reference AWS infrastructure that was not directly created by your current Terraform.
+
+We have already created a VPC in your allocated AWS account, and named it training.
+
+We can use the aws_vpc data source to look up all the information about that VPC.
+
+Find the file named data.tf and add in a new block:
+
+data "aws_vpc" "main" {
+  filter {
+    name   = "tag:Name"
+    values = ["training"]
+  }
+}
+COPY
+Also add the following to the existing outputs.tf file:
+
+output "vpc_id" {
+  value = data.aws_vpc.main.id
+}
+COPY
+Run an apply. As you haven’t provided a plan, Terraform runs a plan for you automatically. Confirm Yes to apply; the VPC’s ID will be displayed as an output.
+
+terraform apply
+COPY
+Amazon allocates each AWS account multiple availability zones, eu-west-1a, eu-west-1b etc, and we can use the aws_availability_zone data source to lookup information about each individual zone, such as its physical id.
+
+Add to the existing data.tf the following:
+
+data "aws_availability_zone" "az_a" {
+  state = "available"
+  name  = "eu-west-1a"
+}
+
+data "aws_availability_zone" "az_b" {
+  state = "available"
+  name  = "eu-west-1b"
+}
+COPY
+Add the following to the existing outputs.tf file:
+
+output "availability_zone_a_id" {
+  value = data.aws_availability_zone.az_a.zone_id
+}
+
+output "availability_zone_b_id" {
+  value = data.aws_availability_zone.az_b.zone_id
+}
+COPY
+terraform apply
+COPY
+Run an apply as above, it will always run a plan first, confirm Yes to apply.
+
+Example output, yours may differ:
+
+Outputs:
+availability_zone_a_id = "euw1-az3"
+availability_zone_b_id = "euw1-az1"
+Note: the value of zone_id returned may differ from the example above because Amazon maps the physical availability zones 1, 2, 3 randomly to the availability zones a, b, c. This is to ensure the resources are spread evenly among the actual physical data centres.
+The data source is also useful for separating any text based formatted data (e.g. JSON or YAML format) from the code that maintains the resource. This makes the Terraform code more readable than if you were to place the data inline using the Terraform “heredoc string” <<, especially as the text becomes more complex.
+
+Heredoc string example
+resource "aws_iam_policy" "my_policy" {
+  # ...
+  policy = <<POLICY
+{
+  "Version": "2012-10-17",
+  "Statement": {
+    "Sid": "PolicyToAllowApp",
+    "Effect": "Allow",
+    "Action": [
+        "ec2:RunInstances",
+        "s3:*",
+        "account:ListRegions"
+    ],
+    "Resource": "*"
+  }
+}
+POLICY
+}
+Data example.
+data "aws_iam_policy_document" "my_policy" {
+  statement {
+    sid       = "PolicyToAllowApp"
+    effect    = "Allow"
+    actions   = ["ec2:RunInstances", "s3:*", "account:ListRegions"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_policy" "my_policy" {
+  # ...
+  policy = data.aws_iam_policy_document.my_policy.json
+}
+The resource statement is simplified in the second example as it does not contain the raw policy.
+
+Note: iam_policy_document data source takes arguments called actions and resources which are plural because they can both contain a list of one or more strings.
+The data can be in a separate text file to the resource code, often called data.tf, which can increase readability further when the data becomes large, or when there are many data sources defined.
+
+Lists
+Terraform supports list data types, defined in literals with square brackets. When referencing an array the index starts from 0 for the first element.
+
+Lists are often used when dealing with networking, for example
+
+dns_servers = ["192.168.0.254", "8.8.8.8", "8.8.4.4"]
+When searching for data sources note there are often singular and plural versions.
+
+We have used the aws_availability_zone data source which obtains information about a single AZ. There is also a aws_availability_zones data source which returns information about all the AZs.
+
+Add the following to data.tf:
+
+data "aws_availability_zones" "azs" {
+  state = "available"
+}
+COPY
+Add the following to outputs.tf:
+
+output "az_names" {
+  value = data.aws_availability_zones.azs.names
+}
+COPY
+Run a plan or apply and you will see:
+
+az_names = tolist([
+  "eu-west-1a",
+  "eu-west-1b",
+  "eu-west-1c",
+])
+We can choose individual items in the list returned by the aws_availability_zones data source by referencing data.aws_availability_zones.azs.names[INDEX] where index starts at 0.
+
+Create a new file subnets.tf:
+
+resource "aws_subnet" "primary" {
+  vpc_id            = data.aws_vpc.main.id
+  availability_zone = data.aws_availability_zones.azs.names[0] # 1st AZ
+  cidr_block        = "10.0.103.0/24"
+}
+
+resource "aws_subnet" "secondary" {
+  vpc_id            = data.aws_vpc.main.id
+  availability_zone = data.aws_availability_zones.azs.names[1] # 2nd AZ
+  cidr_block        = "10.0.104.0/24"
+}
+
+resource "aws_subnet" "tertiary" {
+  vpc_id            = data.aws_vpc.main.id
+  availability_zone = data.aws_availability_zones.azs.names[2] # 3rd AZ
+  cidr_block        = "10.0.105.0/24"
+}
+
+
+terraform apply
+
+
+
+Backend setup
+In Terraform, the backend defines how state is stored and used. It is defined under the terraform section in the configuration files. By default Terraform uses the local backend: state is stored just on your own computer, in JSON files. In this task we’ll move the state to S3.
+
+In the AWS web console, navigate to S3 and check a bucket exists called terraform-state-store-274102197503.
+
+It is highly recommended that you enable Bucket Versioning on the S3 bucket to allow for state recovery in the case of accidental deletions and human error.
+Open the configuration file backend.tf that we created earlier, and change the contents of that file to include a backend block within the terraform block.
+
+  backend "s3" {
+    bucket  = "terraform-state-store-274102197503"
+    key     = "training-workshop03/terraform.tfstate"
+    region  = "eu-west-1"
+    profile = "tf-workshop"
+  }
+  
+Once you have added the backend block the entire backend.tf file will look similar to:
+
+terraform {
+  # AWS provider configuration from earlier
+  required_providers {
+    # ...
+  }
+
+  backend "s3" {
+    bucket  = "terraform-state-store-274102197503"
+    key     = "training-workshop03/terraform.tfstate"
+    region  = "eu-west-1"
+    profile = "tf-workshop"
+  }
+}
+
+terraform init -migrate-state
+
+
+Importing Resources
+As we have learnt, you can update the configuration, and plan and apply those changes with Terraform. However, you may also need to manage infrastructure that wasn’t created by Terraform. Terraform import solves this by loading resources into your Terraform state.
+
+Import Terraform configurations.
+
+Importing infrastructure manipulates Terraform state in ways that could leave existing Terraform projects in an invalid state.
+
+For real workloads, strongly consider making a backup of your Terraform state before importing state into Terraform.
+
+Create a new S3 bucket
+Log in to the console with the user credentials provided
+Search for the S3 service
+Click create a bucket and give it a unique name
+Or use the CLI:
+
+aws s3 mb s3://training-workshop03-new-bucket-name --profile tf-workshop
+
+Add a configuration
+In your s3.tf file created in the initial setup, add the below configuration. Use the unique name that you specified for the new bucket in the AWS web console:
+
+resource "aws_s3_bucket" "anotherbucket" {
+  bucket = "training-workshop03-new-bucket-name" # Change this
+}
+
+resource "aws_s3_bucket_ownership_controls" "anotherbucket" {
+  bucket = aws_s3_bucket.anotherbucket.id
+
+  rule {
+    object_ownership = "BucketOwnerPreferred"
+  }
+}
+
+
+Import the existing infrastructure
+Import the bucket into your current state:
+
+terraform import aws_s3_bucket.anotherbucket training-workshop03-new-bucket-name
+
+List resources in state
+The terraform import does not create the configuration for the resource. You can see all resources within your Terraform state with the below command:
+
+# On Windows, be sure to use PowerShell (grep is an alias for Select-String)
+terraform state list | grep anotherbucket
+
+terraform plan
+terraform apply
+
+
+
+
+
+
+
+
+
+
+
+
+
+
